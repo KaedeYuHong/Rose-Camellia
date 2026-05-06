@@ -56,7 +56,7 @@ const CONFIG = {
   aiFakeChance: 0.55,
   aiReactionMinMs: 75,
   aiReactionMaxMs: 200,
-  attackerHoldScale: 1.02,
+  attackerHoldScale: 1,
   defenderDodgeShift: 72,
   minSwipeDistance: 42,
   fighterAlphaBoxHeight: 1512,
@@ -64,9 +64,9 @@ const CONFIG = {
   fighterBaseYRatio: 0.87,
   heroXRatio: 0.83,
   npcXRatio: 0.285,
-  heroScaleMultiplier: 1.16,
+  heroScaleMultiplier: 1.24,
   npcScaleMultiplier: 1.03,
-  heroYOffset: 42,
+  heroYOffset: 92,
   npcYOffset: 30,
   heroLungeDistance: 230,
   npcLungeDistance: 220,
@@ -775,8 +775,7 @@ function updateFighterTransform<TPose extends Pose>(fighter: FighterVisual<TPose
   let y = fighter.baseY;
   let rotation = 0;
   if (combat.turnState === 'ready' && combat.attacker === fighter.side && fighter.currentPose === 'prepare') {
-    const pulse = 1 + Math.sin(now / 110) * 0.008;
-    scale *= CONFIG.attackerHoldScale * pulse;
+    scale *= CONFIG.attackerHoldScale;
   }
 
   let x = fighter.baseX + dodgeOffset[fighter.side];
