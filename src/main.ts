@@ -5,7 +5,7 @@ type Side = 'hero' | 'npc';
 type TurnState = 'ready' | 'attacking' | 'resolved';
 type SwipeDirection = 'up' | 'down' | 'left' | 'right' | 'none';
 type HeroPose = 'idle' | 'prepare' | 'attack' | 'recover' | 'dodge' | 'victory';
-type NpcPose = 'idle' | 'taunt' | 'prepare' | 'attack' | 'recover' | 'defeat';
+type NpcPose = 'idle' | 'taunt' | 'prepare' | 'attack' | 'dodge' | 'recover' | 'defeat';
 
 type Pose = HeroPose | NpcPose;
 
@@ -57,13 +57,17 @@ const CONFIG = {
   attackerHoldScale: 1.02,
   defenderDodgeShift: 72,
   minSwipeDistance: 42,
-  fighterAlphaBoxHeight: 1450,
-  fighterTargetScreenHeightRatio: 0.62,
-  fighterBaseYRatio: 0.87,
-  heroXRatio: 0.8,
-  npcXRatio: 0.23,
-  heroScaleMultiplier: 0.87,
-  npcScaleMultiplier: 1.02,
+  fighterAlphaBoxHeight: 1360,
+  fighterTargetScreenHeightRatio: 0.84,
+  fighterBaseYRatio: 0.94,
+  heroXRatio: 0.74,
+  npcXRatio: 0.34,
+  heroScaleMultiplier: 1.08,
+  npcScaleMultiplier: 1.14,
+  heroYOffset: 150,
+  npcYOffset: 230,
+  heroLungeDistance: 230,
+  npcLungeDistance: 220,
   speedLineDurationMs: 190,
 };
 
@@ -141,6 +145,7 @@ app.stage.addChild(world);
 const sceneLayer = new Container();
 const fxLayer = new Container();
 const faceLayer = new Container();
+faceLayer.visible = false;
 world.addChild(sceneLayer, faceLayer, fxLayer);
 
 const textures = await loadAllTextures();
@@ -345,13 +350,13 @@ function layoutWorld(): void {
   const baseScale = getBaseFighterScale();
 
   npc.baseX = npcX;
-  npc.baseY = baseY;
+  npc.baseY = baseY + CONFIG.npcYOffset;
   npc.baseScale = baseScale * CONFIG.npcScaleMultiplier;
   npc.container.position.set(npc.baseX, npc.baseY);
   npc.container.scale.set(npc.baseScale);
 
   hero.baseX = heroX;
-  hero.baseY = baseY;
+  hero.baseY = baseY + CONFIG.heroYOffset;
   hero.baseScale = baseScale * CONFIG.heroScaleMultiplier;
   hero.container.position.set(hero.baseX, hero.baseY);
   hero.container.scale.set(hero.baseScale);
@@ -513,7 +518,7 @@ function tryDodge(side: Side, now: number): void {
   if (side === 'hero') {
     setPose(hero, 'dodge');
   } else {
-    setPose(npc, 'taunt');
+    setPose(npc, 'dodge');
   }
 
   dodgeOffset[side] = side === 'hero' ? 66 : -66;
@@ -558,7 +563,6 @@ function resolveAttack(): void {
       combat.npcHp = Math.max(0, combat.npcHp - damage);
       npc.shakeUntil = performance.now() + 240;
       setPose(npc, 'recover');
-      triggerNpcFacePopup();
     } else {
       combat.heroHp = Math.max(0, combat.heroHp - damage);
       hero.shakeUntil = performance.now() + 240;
@@ -731,7 +735,8 @@ function updateFighterTransform<TPose extends Pose>(fighter: FighterVisual<TPose
   let x = fighter.baseX + dodgeOffset[fighter.side];
   if (lungeUntil[fighter.side] > now) {
     const remainRatio = (lungeUntil[fighter.side] - now) / 220;
-    const strength = Math.sin((1 - remainRatio) * Math.PI) * 95;
+    const lungeDistance = fighter.side === 'hero' ? CONFIG.heroLungeDistance : CONFIG.npcLungeDistance;
+    const strength = Math.sin((1 - remainRatio) * Math.PI) * lungeDistance;
     x += fighter.side === 'hero' ? -strength : strength;
   }
 
@@ -746,7 +751,15 @@ function updateFighterTransform<TPose extends Pose>(fighter: FighterVisual<TPose
   }
 
   if (fighter.side === 'hero' && fighter.currentPose === 'attack') {
+    x -= 120;
+    y += 4;
     rotation = -0.02;
+  }
+
+  if (fighter.side === 'npc' && fighter.currentPose === 'attack') {
+    x += 110;
+    y += 4;
+    rotation = 0.024;
   }
 
   fighter.container.position.set(x, y);
@@ -877,6 +890,7 @@ async function loadAllTextures(): Promise<{
     taunt: await loadTexture('/assets/characters/npc/taunt.png'),
     prepare: await loadTexture('/assets/characters/npc/prepare.png'),
     attack: await loadTexture('/assets/characters/npc/attack.png'),
+    dodge: await loadTexture('/assets/characters/npc/dodge.png'),
     recover: await loadTexture('/assets/characters/npc/recover.png'),
     defeat: await loadTexture('/assets/characters/npc/defeat.png'),
   } satisfies Record<NpcPose, Texture>;
@@ -907,24 +921,12 @@ function startCounterWindow(counterSide: Side, fromAttacker: Side): void {
     setPose(hero, 'dodge');
     setStatus('完美躲避！立即左/上滑反击');
   } else {
-    setPose(npc, 'taunt');
+    setPose(npc, 'dodge');
     setStatus('对手躲避成功，可能会立刻反击');
     pendingAi.counterAt = now + randInt(130, 280);
   }
 
   refreshTurnHint();
-}
-
-function triggerNpcFacePopup(): void {
-  const hpRatio = combat.npcHp / CONFIG.maxHp;
-  if (hpRatio <= 0.3) {
-    facePopupLevel = 3;
-  } else if (hpRatio <= 0.55) {
-    facePopupLevel = 2;
-  } else {
-    facePopupLevel = 1;
-  }
-  facePopupUntil = performance.now() + 520;
 }
 
 function expireCounterWindow(): void {
