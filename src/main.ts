@@ -2,10 +2,10 @@
 import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 
 type Side = 'hero' | 'npc';
-type TurnState = 'ready' | 'attacking' | 'resolved';
+type TurnState = 'ready' | 'charging' | 'swinging' | 'resolved';
 type SwipeDirection = 'up' | 'down' | 'left' | 'right' | 'none';
 type HeroPose = 'idle' | 'prepare' | 'attack' | 'recover' | 'dodge' | 'victory';
-type NpcPose = 'idle' | 'taunt' | 'prepare' | 'attack' | 'dodge' | 'recover' | 'defeat';
+type NpcPose = 'idle' | 'prepare' | 'charge' | 'attack' | 'hit' | 'miss' | 'dodge' | 'hurt' | 'defeat';
 
 type Pose = HeroPose | NpcPose;
 
@@ -28,7 +28,8 @@ interface CombatState {
   turnState: TurnState;
   turnDeadlineMs: number;
   turnTimeLeftMs: number;
-  attackWindowEndsAt: number;
+  chargeEndsAt: number;
+  swingEndsAt: number;
   counterWindowFor: Side | null;
   counterWindowEndsAt: number;
   counterFromAttacker: Side | null;
@@ -44,7 +45,8 @@ const CONFIG = {
   height: 1920,
   maxHp: 200,
   baseDamage: 32,
-  attackWindowMs: 420,
+  chargeWindowMs: 220,
+  swingWindowMs: 230,
   counterWindowMs: 850,
   counterDamageMultiplier: 1.45,
   dodgeCooldownMs: 1000,
@@ -52,20 +54,20 @@ const CONFIG = {
   aiPrepareMinMs: 380,
   aiPrepareMaxMs: 1700,
   aiFakeChance: 0.55,
-  aiReactionMinMs: 110,
-  aiReactionMaxMs: 320,
+  aiReactionMinMs: 75,
+  aiReactionMaxMs: 200,
   attackerHoldScale: 1.02,
   defenderDodgeShift: 72,
   minSwipeDistance: 42,
-  fighterAlphaBoxHeight: 1360,
-  fighterTargetScreenHeightRatio: 0.84,
+  fighterAlphaBoxHeight: 1512,
+  fighterTargetScreenHeightRatio: 0.82,
   fighterBaseYRatio: 0.94,
-  heroXRatio: 0.74,
-  npcXRatio: 0.34,
-  heroScaleMultiplier: 1.08,
-  npcScaleMultiplier: 1.14,
-  heroYOffset: 150,
-  npcYOffset: 230,
+  heroXRatio: 0.83,
+  npcXRatio: 0.285,
+  heroScaleMultiplier: 1.12,
+  npcScaleMultiplier: 0.98,
+  heroYOffset: 138,
+  npcYOffset: 146,
   heroLungeDistance: 230,
   npcLungeDistance: 220,
   speedLineDurationMs: 190,
@@ -103,10 +105,10 @@ appRoot.innerHTML = `
     <div class="zone-title">SLAP ZONE</div>
     <div id="zone-phase" class="zone-phase">ATTACK TURN</div>
     <div id="zone-time" class="zone-time">5.0</div>
-    <div id="zone-hint" class="zone-hint">左滑/上滑攻击，右滑/下滑躲避</div>
+    <div id="zone-hint" class="zone-hint">按住抬手，左/上滑攻击；右/下滑躲避</div>
   </div>
 
-  <div id="status-line">你的回合：左/上滑直接出手</div>
+  <div id="status-line">你的回合：按住抬手，左/上滑出手</div>
 </div>
 `;
 
@@ -196,7 +198,8 @@ const combat: CombatState = {
   turnState: 'ready',
   turnDeadlineMs: performance.now() + CONFIG.turnLimitMs,
   turnTimeLeftMs: CONFIG.turnLimitMs,
-  attackWindowEndsAt: 0,
+  chargeEndsAt: 0,
+  swingEndsAt: 0,
   counterWindowFor: null,
   counterWindowEndsAt: 0,
   counterFromAttacker: null,
@@ -246,7 +249,11 @@ app.ticker.add((ticker) => {
 
   combat.turnTimeLeftMs = Math.max(0, combat.turnDeadlineMs - now);
 
-  if (combat.turnState === 'attacking' && now >= combat.attackWindowEndsAt) {
+  if (combat.turnState === 'charging' && now >= combat.chargeEndsAt) {
+    enterSwingPhase(now);
+  }
+
+  if (combat.turnState === 'swinging' && now >= combat.swingEndsAt) {
     resolveAttack();
   }
 
@@ -389,9 +396,9 @@ function setupInput(): void {
     pointerStartX = event.clientX;
     pointerStartY = event.clientY;
 
-    if (combat.attacker === 'hero' && combat.counterWindowFor !== 'hero') {
+    if (combat.attacker === 'hero') {
       setPose(hero, 'prepare');
-      setStatus('向左/上滑动即可出手');
+      setStatus(combat.counterWindowFor === 'hero' ? '反击：按住后左/上滑出手' : '按住抬手，可松开取消；左/上滑出手');
     }
   });
 
@@ -402,7 +409,7 @@ function setupInput(): void {
 
     pointerDown = false;
     activePointerId = -1;
-    if (combat.attacker === 'hero' && combat.turnState === 'ready' && combat.counterWindowFor !== 'hero') {
+    if (combat.attacker === 'hero' && combat.turnState === 'ready') {
       setPose(hero, 'idle');
     }
   });
@@ -410,7 +417,7 @@ function setupInput(): void {
   root.addEventListener('pointercancel', () => {
     pointerDown = false;
     activePointerId = -1;
-    if (combat.attacker === 'hero' && combat.turnState === 'ready' && combat.counterWindowFor !== 'hero') {
+    if (combat.attacker === 'hero' && combat.turnState === 'ready') {
       setPose(hero, 'idle');
     }
   });
@@ -432,6 +439,7 @@ function setupInput(): void {
       const isCounter = combat.counterWindowFor === 'hero';
       pointerDown = false;
       activePointerId = -1;
+      setPose(hero, 'prepare');
       triggerAttack('hero', isCounter);
       return;
     }
@@ -470,37 +478,56 @@ function triggerAttack(attacker: Side, isCounter = false): void {
   }
 
   const now = performance.now();
-  combat.turnState = 'attacking';
-  combat.attackWindowEndsAt = now + CONFIG.attackWindowMs;
+  combat.turnState = 'charging';
+  combat.chargeEndsAt = now + CONFIG.chargeWindowMs;
+  combat.swingEndsAt = combat.chargeEndsAt + CONFIG.swingWindowMs;
+  combat.turnDeadlineMs = combat.swingEndsAt;
+  combat.turnTimeLeftMs = Math.max(0, combat.swingEndsAt - now);
   combat.isCounterAttack = isCounter;
   combat.counterWindowFor = null;
   combat.counterWindowEndsAt = 0;
   combat.counterFromAttacker = null;
   combat.dodgeSuccessThisAttack.hero = false;
   combat.dodgeSuccessThisAttack.npc = false;
+  pendingAi.dodgeCommitted = false;
+  pendingAi.dodgeAt = 0;
+
+  if (attacker === 'hero') {
+    setPose(hero, 'prepare');
+    setPose(npc, 'idle');
+    setStatus(isCounter ? '反击蓄力中' : '蓄力中，已不可取消');
+  } else {
+    setPose(npc, 'charge');
+    setPose(hero, 'idle');
+    setStatus(isCounter ? '对手反击蓄力中' : '对手蓄力中，注意出手瞬间躲避');
+  }
+  refreshTurnHint();
+}
+
+function enterSwingPhase(now: number): void {
+  if (combat.turnState !== 'charging') {
+    return;
+  }
+
+  const attacker = combat.attacker;
+  combat.turnState = 'swinging';
+  combat.turnDeadlineMs = combat.swingEndsAt;
+  combat.turnTimeLeftMs = Math.max(0, combat.swingEndsAt - now);
   lungeUntil[attacker] = now + 220;
 
   if (attacker === 'hero') {
     setPose(hero, 'attack');
-    setPose(npc, 'idle');
-    pendingAi.dodgeCommitted = false;
-    if (!isCounter) {
+    setStatus(combat.isCounterAttack ? '反击挥击中' : '挥击中');
+    if (!combat.isCounterAttack) {
       pendingAi.dodgeAt = now + randInt(CONFIG.aiReactionMinMs, CONFIG.aiReactionMaxMs);
     }
-    setStatus(isCounter ? '反击出手中' : '你已出手，对手若判断成功会躲避');
   } else {
     setPose(npc, 'attack');
-    setPose(hero, 'idle');
-    setStatus(isCounter ? '对手反击出手中' : '对手出手中，立即右/下滑尝试躲避');
+    setStatus(combat.isCounterAttack ? '对手反击挥击中，右/下滑躲避' : '对手挥击中，右/下滑躲避');
   }
 
   speedLineUntil = now + CONFIG.speedLineDurationMs;
-
-  window.setTimeout(() => {
-    if (combat.turnState === 'attacking') {
-      resolveAttack();
-    }
-  }, Math.floor(CONFIG.attackWindowMs * 0.56));
+  refreshTurnHint();
 }
 
 function tryDodge(side: Side, now: number): void {
@@ -513,7 +540,7 @@ function tryDodge(side: Side, now: number): void {
   }
 
   combat.dodgeCooldownUntil[side] = now + CONFIG.dodgeCooldownMs;
-  const valid = combat.turnState === 'attacking' && side !== combat.attacker && now <= combat.attackWindowEndsAt;
+  const valid = combat.turnState === 'swinging' && side !== combat.attacker && now <= combat.swingEndsAt;
 
   if (side === 'hero') {
     setPose(hero, 'dodge');
@@ -543,7 +570,7 @@ function tryDodge(side: Side, now: number): void {
 }
 
 function resolveAttack(): void {
-  if (combat.turnState !== 'attacking') {
+  if (combat.turnState !== 'swinging') {
     return;
   }
 
@@ -556,17 +583,33 @@ function resolveAttack(): void {
   combat.dodgeSuccessBuff[attacker] = 1;
 
   if (dodged) {
-    startCounterWindow(defender, attacker);
+    combat.turnState = 'resolved';
+    combat.isCounterAttack = false;
+    if (attacker === 'npc') {
+      setPose(npc, 'miss');
+    } else {
+      setPose(hero, 'recover');
+    }
+    setStatus(`${nameOf(defender)} 躲避成功`);
+    window.setTimeout(() => {
+      startCounterWindow(defender, attacker);
+    }, 120);
     return;
   } else {
     if (defender === 'npc') {
       combat.npcHp = Math.max(0, combat.npcHp - damage);
       npc.shakeUntil = performance.now() + 240;
-      setPose(npc, 'recover');
+      setPose(npc, 'hurt');
+      if (attacker === 'hero') {
+        setPose(hero, 'attack');
+      }
     } else {
       combat.heroHp = Math.max(0, combat.heroHp - damage);
       hero.shakeUntil = performance.now() + 240;
       setPose(hero, 'recover');
+      if (attacker === 'npc') {
+        setPose(npc, 'hit');
+      }
     }
     showHitFx(defender);
     setStatus(`${nameOf(attacker)} 命中，造成 ${damage} 伤害`);
@@ -580,7 +623,7 @@ function resolveAttack(): void {
       combat.winner = combat.npcHp > combat.heroHp ? 'npc' : 'hero';
       if (combat.winner === 'hero') {
         setPose(hero, 'victory');
-        setPose(npc, 'recover');
+        setPose(npc, 'defeat');
       }
       setStatus(`${nameOf(combat.winner)} 获胜`);
       refreshTurnHint();
@@ -591,7 +634,7 @@ function resolveAttack(): void {
       setPose(hero, 'recover');
       setPose(npc, 'idle');
     } else {
-      setPose(npc, 'taunt');
+      setPose(npc, 'idle');
       setPose(hero, 'idle');
     }
 
@@ -610,6 +653,8 @@ function swapTurn(): void {
   combat.counterWindowEndsAt = 0;
   combat.counterFromAttacker = null;
   combat.isCounterAttack = false;
+  combat.chargeEndsAt = 0;
+  combat.swingEndsAt = 0;
   combat.attacker = combat.attacker === 'hero' ? 'npc' : 'hero';
   combat.turnState = 'ready';
   combat.turnDeadlineMs = performance.now() + CONFIG.turnLimitMs;
@@ -625,6 +670,8 @@ function swapTurn(): void {
 
 function finishTurnWithoutAttack(): void {
   combat.turnState = 'resolved';
+  combat.chargeEndsAt = 0;
+  combat.swingEndsAt = 0;
   setPose(hero, 'idle');
   setPose(npc, 'idle');
   window.setTimeout(() => {
@@ -680,7 +727,7 @@ function updateAi(now: number): void {
     }
   }
 
-  if (combat.attacker === 'hero' && combat.turnState === 'attacking') {
+  if (combat.attacker === 'hero' && combat.turnState === 'swinging') {
     if (!pendingAi.dodgeCommitted && pendingAi.dodgeAt && now >= pendingAi.dodgeAt) {
       pendingAi.dodgeCommitted = true;
       tryDodge('npc', now);
@@ -756,6 +803,12 @@ function updateFighterTransform<TPose extends Pose>(fighter: FighterVisual<TPose
     rotation = -0.02;
   }
 
+  if (fighter.side === 'npc' && fighter.currentPose === 'charge') {
+    x += 42;
+    y += 4;
+    rotation = 0.02;
+  }
+
   if (fighter.side === 'npc' && fighter.currentPose === 'attack') {
     x += 110;
     y += 4;
@@ -823,14 +876,27 @@ function refreshTurnHint(): void {
   if (combat.counterWindowFor) {
     (el.zonePhase as HTMLDivElement).textContent = 'COUNTER';
     (el.zoneHint as HTMLDivElement).textContent =
-      combat.counterWindowFor === 'hero' ? '立刻左/上滑进行反击' : '对手可能反击，准备防守';
+      combat.counterWindowFor === 'hero' ? '按住抬手后左/上滑反击' : '对手可能反击，准备防守';
+    return;
+  }
+
+  if (combat.turnState === 'charging') {
+    (el.zonePhase as HTMLDivElement).textContent = 'CHARGE';
+    (el.zoneHint as HTMLDivElement).textContent = '已锁定出手，不可取消';
+    return;
+  }
+
+  if (combat.turnState === 'swinging') {
+    (el.zonePhase as HTMLDivElement).textContent = 'SWING';
+    (el.zoneHint as HTMLDivElement).textContent =
+      combat.attacker === 'npc' ? '立刻右/下滑躲避' : '挥击中';
     return;
   }
 
   if (combat.attacker === 'hero') {
     (el.zonePhase as HTMLDivElement).textContent = 'ATTACK TURN';
-    (el.zoneHint as HTMLDivElement).textContent = '左滑/上滑攻击';
-    setStatus('你的回合：左/上滑即可出手');
+    (el.zoneHint as HTMLDivElement).textContent = '按住抬手，左/上滑攻击';
+    setStatus('你的回合：按住抬手，可松开取消');
   } else {
     (el.zonePhase as HTMLDivElement).textContent = 'DEFENSE TURN';
     (el.zoneHint as HTMLDivElement).textContent = '右滑/下滑躲避对手攻击';
@@ -887,11 +953,13 @@ async function loadAllTextures(): Promise<{
 
   const npc = {
     idle: await loadTexture('/assets/characters/npc/idle.png'),
-    taunt: await loadTexture('/assets/characters/npc/taunt.png'),
     prepare: await loadTexture('/assets/characters/npc/prepare.png'),
+    charge: await loadTexture('/assets/characters/npc/charge.png'),
     attack: await loadTexture('/assets/characters/npc/attack.png'),
+    hit: await loadTexture('/assets/characters/npc/hit.png'),
+    miss: await loadTexture('/assets/characters/npc/miss.png'),
     dodge: await loadTexture('/assets/characters/npc/dodge.png'),
-    recover: await loadTexture('/assets/characters/npc/recover.png'),
+    hurt: await loadTexture('/assets/characters/npc/hurt.png'),
     defeat: await loadTexture('/assets/characters/npc/defeat.png'),
   } satisfies Record<NpcPose, Texture>;
 
@@ -908,6 +976,8 @@ async function loadAllTextures(): Promise<{
 function startCounterWindow(counterSide: Side, fromAttacker: Side): void {
   const now = performance.now();
   combat.turnState = 'ready';
+  combat.chargeEndsAt = 0;
+  combat.swingEndsAt = 0;
   combat.attacker = counterSide;
   combat.counterWindowFor = counterSide;
   combat.counterWindowEndsAt = now + CONFIG.counterWindowMs;
