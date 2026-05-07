@@ -54,6 +54,7 @@ const CONFIG = {
   aiPrepareMinMs: 380,
   aiPrepareMaxMs: 1700,
   aiFakeChance: 0.55,
+  aiDodgeChance: 0.32,
   aiReactionMinMs: 75,
   aiReactionMaxMs: 200,
   attackerHoldScale: 1,
@@ -73,46 +74,53 @@ const CONFIG = {
   speedLineDurationMs: 190,
 };
 
+const VIEWPORT_WIDTH = 560;
+const VIEWPORT_HEIGHT = Math.round((VIEWPORT_WIDTH * CONFIG.height) / CONFIG.width);
+
 const appRoot = document.querySelector<HTMLDivElement>('#app');
 if (!appRoot) {
   throw new Error('Missing #app element');
 }
 
 appRoot.innerHTML = `
-<div id="game-root">
-  <div id="hud-top">
-    <div class="player-name">NPC</div>
-    <div class="round-text">ROUND <span id="round-value">1</span></div>
-    <div class="enemy-name">得分 0000</div>
-  </div>
-
-  <div id="bars-row">
-    <div class="bar-wrap">
-      <div class="bar-label">NPC 气势</div>
-      <div class="bar-shell"><div id="npc-hp" class="bar-fill player"></div></div>
-      <div id="npc-hp-text" class="bar-text">200/200</div>
+<div id="game-viewport">
+  <div id="game-root">
+    <div id="hud-top">
+      <div class="player-name">NPC</div>
+      <div class="round-text">ROUND <span id="round-value">1</span></div>
+      <div class="enemy-name">得分 0000</div>
     </div>
-    <div class="bar-wrap right">
-      <div class="bar-label">主角 气势</div>
-      <div class="bar-shell"><div id="hero-hp" class="bar-fill enemy"></div></div>
-      <div id="hero-hp-text" class="bar-text">200/200</div>
+
+    <div id="bars-row">
+      <div class="bar-wrap">
+        <div class="bar-label">NPC 气势</div>
+        <div class="bar-shell"><div id="npc-hp" class="bar-fill player"></div></div>
+        <div id="npc-hp-text" class="bar-text">200/200</div>
+      </div>
+      <div class="bar-wrap right">
+        <div class="bar-label">主角 气势</div>
+        <div class="bar-shell"><div id="hero-hp" class="bar-fill enemy"></div></div>
+        <div id="hero-hp-text" class="bar-text">200/200</div>
+      </div>
     </div>
+
+    <div id="canvas-holder"></div>
+
+    <div id="slap-zone">
+      <div class="zone-title">SLAP ZONE</div>
+      <div id="zone-phase" class="zone-phase">ATTACK TURN</div>
+      <div id="zone-time" class="zone-time">5.0</div>
+      <div id="zone-hint" class="zone-hint">按住后任意方向滑动：进攻出手 / 防守躲避</div>
+    </div>
+
+    <div id="status-line">你的回合：按住抬手，任意方向滑动出手</div>
   </div>
-
-  <div id="canvas-holder"></div>
-
-  <div id="slap-zone">
-    <div class="zone-title">SLAP ZONE</div>
-    <div id="zone-phase" class="zone-phase">ATTACK TURN</div>
-    <div id="zone-time" class="zone-time">5.0</div>
-    <div id="zone-hint" class="zone-hint">按住抬手，左/上滑攻击；右/下滑躲避</div>
-  </div>
-
-  <div id="status-line">你的回合：按住抬手，左/上滑出手</div>
 </div>
 `;
 
 const el = {
+  gameViewport: document.querySelector<HTMLDivElement>('#game-viewport'),
+  gameRoot: document.querySelector<HTMLDivElement>('#game-root'),
   canvasHolder: document.querySelector<HTMLDivElement>('#canvas-holder'),
   npcHp: document.querySelector<HTMLDivElement>('#npc-hp'),
   heroHp: document.querySelector<HTMLDivElement>('#hero-hp'),
@@ -133,7 +141,8 @@ for (const [key, value] of Object.entries(el)) {
 
 const app = new Application();
 await app.init({
-  resizeTo: el.canvasHolder as HTMLDivElement,
+  width: VIEWPORT_WIDTH,
+  height: VIEWPORT_HEIGHT,
   background: '#060606',
   antialias: true,
   resolution: Math.min(window.devicePixelRatio || 1, 2),
@@ -231,12 +240,13 @@ let pendingAi = {
 };
 
 layoutWorld();
+applyViewportScale();
 setupInput();
 updateUI();
 refreshTurnHint();
 planAiTurnIfNeeded();
 
-window.addEventListener('resize', layoutWorld);
+window.addEventListener('resize', applyViewportScale);
 
 app.ticker.add((ticker) => {
   const now = performance.now();
@@ -373,6 +383,17 @@ function layoutWorld(): void {
   layoutNpcFaceSprites();
 }
 
+function applyViewportScale(): void {
+  const viewport = el.gameViewport as HTMLDivElement;
+  const root = el.gameRoot as HTMLDivElement;
+  const viewportWidth = viewport.clientWidth;
+  const viewportHeight = viewport.clientHeight;
+  const scale = Math.min(viewportWidth / VIEWPORT_WIDTH, viewportHeight / VIEWPORT_HEIGHT);
+  const offsetX = (viewportWidth - VIEWPORT_WIDTH * scale) * 0.5;
+  const offsetY = (viewportHeight - VIEWPORT_HEIGHT * scale) * 0.5;
+  root.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+}
+
 function layoutNpcFaceSprites(): void {
   for (const sprite of Object.values(npcFaceSprites)) {
     sprite.position.set(npc.baseX + 95 * npc.baseScale, npc.baseY - 1180 * npc.baseScale);
@@ -387,7 +408,11 @@ function setupInput(): void {
   }
 
   root.addEventListener('pointerdown', (event) => {
-    if (combat.winner || combat.turnState !== 'ready') {
+    if (combat.winner) {
+      return;
+    }
+
+    if (combat.attacker === 'hero' && combat.turnState !== 'ready') {
       return;
     }
 
@@ -398,7 +423,13 @@ function setupInput(): void {
 
     if (combat.attacker === 'hero') {
       setPose(hero, 'prepare');
-      setStatus(combat.counterWindowFor === 'hero' ? '反击：按住后左/上滑出手' : '按住抬手，可松开取消；左/上滑出手');
+      setStatus(
+        combat.counterWindowFor === 'hero'
+          ? '反击：按住后任意方向滑动出手'
+          : '按住抬手，可松开取消；任意方向滑动出手',
+      );
+    } else {
+      setStatus('防守中：按住后任意方向滑动躲避');
     }
   });
 
@@ -432,10 +463,7 @@ function setupInput(): void {
       return;
     }
 
-    const isAttackSwipe = direction === 'left' || direction === 'up';
-    const isDodgeSwipe = direction === 'right' || direction === 'down';
-
-    if (combat.attacker === 'hero' && combat.turnState === 'ready' && isAttackSwipe) {
+    if (combat.attacker === 'hero' && combat.turnState === 'ready') {
       const isCounter = combat.counterWindowFor === 'hero';
       pointerDown = false;
       activePointerId = -1;
@@ -444,15 +472,10 @@ function setupInput(): void {
       return;
     }
 
-    if (combat.attacker === 'npc' && isDodgeSwipe) {
+    if (combat.attacker === 'npc') {
       tryDodge('hero', performance.now());
       pointerStartX = event.clientX;
       pointerStartY = event.clientY;
-      return;
-    }
-
-    if (combat.attacker === 'hero' && isDodgeSwipe) {
-      setStatus('当前是攻击回合，请左/上滑出手');
     }
   });
 }
@@ -518,12 +541,14 @@ function enterSwingPhase(now: number): void {
   if (attacker === 'hero') {
     setPose(hero, 'attack');
     setStatus(combat.isCounterAttack ? '反击挥击中' : '挥击中');
-    if (!combat.isCounterAttack) {
+    if (!combat.isCounterAttack && Math.random() < CONFIG.aiDodgeChance) {
       pendingAi.dodgeAt = now + randInt(CONFIG.aiReactionMinMs, CONFIG.aiReactionMaxMs);
+    } else {
+      pendingAi.dodgeAt = 0;
     }
   } else {
     setPose(npc, 'attack');
-    setStatus(combat.isCounterAttack ? '对手反击挥击中，右/下滑躲避' : '对手挥击中，右/下滑躲避');
+    setStatus(combat.isCounterAttack ? '对手反击挥击中，任意方向滑动躲避' : '对手挥击中，任意方向滑动躲避');
   }
 
   speedLineUntil = now + CONFIG.speedLineDurationMs;
@@ -875,7 +900,7 @@ function refreshTurnHint(): void {
   if (combat.counterWindowFor) {
     (el.zonePhase as HTMLDivElement).textContent = 'COUNTER';
     (el.zoneHint as HTMLDivElement).textContent =
-      combat.counterWindowFor === 'hero' ? '按住抬手后左/上滑反击' : '对手可能反击，准备防守';
+      combat.counterWindowFor === 'hero' ? '按住抬手后任意方向滑动反击' : '对手可能反击，准备防守';
     return;
   }
 
@@ -888,18 +913,18 @@ function refreshTurnHint(): void {
   if (combat.turnState === 'swinging') {
     (el.zonePhase as HTMLDivElement).textContent = 'SWING';
     (el.zoneHint as HTMLDivElement).textContent =
-      combat.attacker === 'npc' ? '立刻右/下滑躲避' : '挥击中';
+      combat.attacker === 'npc' ? '立刻任意方向滑动躲避' : '挥击中';
     return;
   }
 
   if (combat.attacker === 'hero') {
     (el.zonePhase as HTMLDivElement).textContent = 'ATTACK TURN';
-    (el.zoneHint as HTMLDivElement).textContent = '按住抬手，左/上滑攻击';
+    (el.zoneHint as HTMLDivElement).textContent = '按住抬手，任意方向滑动攻击';
     setStatus('你的回合：按住抬手，可松开取消');
   } else {
     (el.zonePhase as HTMLDivElement).textContent = 'DEFENSE TURN';
-    (el.zoneHint as HTMLDivElement).textContent = '右滑/下滑躲避对手攻击';
-    setStatus('对手回合：观察前摇，攻击瞬间右/下滑');
+    (el.zoneHint as HTMLDivElement).textContent = '按住后任意方向滑动躲避对手攻击';
+    setStatus('对手回合：观察前摇，攻击瞬间任意方向滑动');
   }
 }
 
@@ -988,7 +1013,7 @@ function startCounterWindow(counterSide: Side, fromAttacker: Side): void {
 
   if (counterSide === 'hero') {
     setPose(hero, 'dodge');
-    setStatus('完美躲避！立即左/上滑反击');
+    setStatus('完美躲避！立即按住后任意方向滑动反击');
   } else {
     setPose(npc, 'dodge');
     setStatus('对手躲避成功，可能会立刻反击');

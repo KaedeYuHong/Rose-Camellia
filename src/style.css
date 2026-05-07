@@ -27,14 +27,22 @@ body {
   overscroll-behavior: none;
 }
 
-#game-root {
+#game-viewport {
   width: 100%;
   height: 100%;
-  max-width: 560px;
-  margin: 0 auto;
   position: relative;
-  touch-action: none;
   overflow: hidden;
+  touch-action: none;
+}
+
+#game-root {
+  width: 560px;
+  height: 996px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: hidden;
+  transform-origin: top left;
 }
 
 #hud-top {
@@ -54,7 +62,7 @@ body {
 .player-name,
 .enemy-name {
   max-width: 34%;
-  font-size: clamp(14px, 3.4vw, 22px);
+  font-size: 22px;
   letter-spacing: 0.8px;
   white-space: nowrap;
 }
@@ -64,7 +72,7 @@ body {
 }
 
 .round-text {
-  font-size: clamp(14px, 3.2vw, 22px);
+  font-size: 22px;
   color: #fbe6ce;
   letter-spacing: 1.5px;
 }
@@ -134,7 +142,7 @@ body {
   left: 50%;
   bottom: 120px;
   transform: translateX(-50%);
-  width: min(76vw, 360px);
+  width: 360px;
   border-radius: 999px;
   border: 2px solid rgba(248, 221, 186, 0.67);
   background: radial-gradient(circle at 50% 50%, rgba(71, 41, 16, 0.45), rgba(8, 8, 8, 0.85));
