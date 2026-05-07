@@ -1048,10 +1048,20 @@ function expireCounterWindow(): void {
 }
 
 async function loadTexture(path: string): Promise<Texture> {
+  const resolvedPath = resolveAssetPath(path);
   try {
-    return await Assets.load(path) as Texture;
+    return await Assets.load(resolvedPath) as Texture;
   } catch (error) {
-    console.error(`Texture load failed: ${path}`, error);
+    console.error(`Texture load failed: ${resolvedPath}`, error);
     return Texture.WHITE;
   }
+}
+
+function resolveAssetPath(path: string): string {
+  if (/^(?:https?:)?\/\//.test(path) || path.startsWith('data:')) {
+    return path;
+  }
+
+  const normalized = path.startsWith('/') ? path.slice(1) : path;
+  return `${import.meta.env.BASE_URL}${normalized}`;
 }
