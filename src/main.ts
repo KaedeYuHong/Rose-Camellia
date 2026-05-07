@@ -61,14 +61,14 @@ const CONFIG = {
   defenderDodgeShift: 72,
   minSwipeDistance: 42,
   fighterAlphaBoxHeight: 1512,
-  fighterTargetScreenHeightRatio: 0.9,
+  fighterTargetScreenHeightRatio: 0.76,
   fighterBaseYRatio: 0.87,
-  heroXRatio: 0.83,
-  npcXRatio: 0.285,
-  heroScaleMultiplier: 1.24,
-  npcScaleMultiplier: 1.03,
-  heroYOffset: 92,
-  npcYOffset: 30,
+  heroXRatio: 0.8,
+  npcXRatio: 0.45,
+  heroScaleMultiplier: 1.7,
+  npcScaleMultiplier: 0.92,
+  heroYOffset: 1500,
+  npcYOffset: 140,
   heroLungeDistance: 230,
   npcLungeDistance: 220,
   speedLineDurationMs: 190,
@@ -160,10 +160,11 @@ faceLayer.visible = false;
 world.addChild(sceneLayer, faceLayer, fxLayer);
 
 const textures = await loadAllTextures();
+const stageBackground = createStageBackground(textures.stageBackground);
 
 const hero = createHero(textures.hero);
 const npc = createNpc(textures.npc);
-sceneLayer.addChild(npc.container, hero.container);
+sceneLayer.addChild(stageBackground, npc.container, hero.container);
 
 const npcFaceSprites = createNpcFaceSprites(textures.npcFace);
 for (const sprite of Object.values(npcFaceSprites)) {
@@ -344,6 +345,16 @@ function createNpcFaceSprites(faceTextures: Texture[]): Record<number, Sprite> {
     sprites[index] = sprite;
   }
   return sprites;
+}
+
+function createStageBackground(texture: Texture): Sprite {
+  const sprite = new Sprite(texture);
+  sprite.anchor.set(0.5, 0.5);
+  sprite.position.set(CONFIG.width * 0.5, CONFIG.height * 0.5);
+  const scale = Math.max(CONFIG.width / texture.width, CONFIG.height / texture.height);
+  sprite.scale.set(scale);
+  sprite.alpha = 1;
+  return sprite;
 }
 
 function setPose<TPose extends string>(fighter: FighterVisual<TPose>, pose: TPose): void {
@@ -962,10 +973,13 @@ function randInt(min: number, max: number): number {
 }
 
 async function loadAllTextures(): Promise<{
+  stageBackground: Texture;
   hero: Record<HeroPose, Texture>;
   npc: Record<NpcPose, Texture>;
   npcFace: Texture[];
 }> {
+  const stageBackground = await loadTexture('/assets/backgrounds/temp-design.png');
+
   const hero = {
     idle: await loadTexture('/assets/characters/player/idle.png'),
     prepare: await loadTexture('/assets/characters/player/prepare.png'),
@@ -994,7 +1008,7 @@ async function loadAllTextures(): Promise<{
     await loadTexture('/assets/characters/npc_face/face_3.png'),
   ];
 
-  return { hero, npc, npcFace };
+  return { stageBackground, hero, npc, npcFace };
 }
 
 function startCounterWindow(counterSide: Side, fromAttacker: Side): void {
