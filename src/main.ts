@@ -4,7 +4,7 @@ import { Application, Assets, Container, Graphics, Sprite, Text, Texture } from 
 type Side = 'hero' | 'npc';
 type TurnState = 'ready' | 'charging' | 'swinging' | 'resolved';
 type SwipeDirection = 'up' | 'down' | 'left' | 'right' | 'none';
-type HeroPose = 'idle' | 'prepare' | 'attack' | 'recover' | 'dodge' | 'victory';
+type HeroPose = 'idle' | 'prepare' | 'charge' | 'attackTransition' | 'attack' | 'dodge' | 'hit' | 'victory';
 type NpcPose = 'idle' | 'prepare' | 'charge' | 'attack' | 'hit' | 'miss' | 'dodge' | 'hurt' | 'defeat';
 
 type Pose = HeroPose | NpcPose;
@@ -47,6 +47,7 @@ const CONFIG = {
   baseDamage: 32,
   chargeWindowMs: 220,
   swingWindowMs: 230,
+  heroAttackTransitionMs: 90,
   counterWindowMs: 850,
   counterDamageMultiplier: 1.45,
   dodgeCooldownMs: 1000,
@@ -224,6 +225,7 @@ let pointerDown = false;
 let pointerStartX = 0;
 let pointerStartY = 0;
 let activePointerId = -1;
+let heroAttackPoseSwitchAt = 0;
 let sceneShakeMs = 0;
 let speedLineUntil = 0;
 let facePopupUntil = 0;
@@ -262,6 +264,17 @@ app.ticker.add((ticker) => {
 
   if (combat.turnState === 'charging' && now >= combat.chargeEndsAt) {
     enterSwingPhase(now);
+  }
+
+  if (
+    heroAttackPoseSwitchAt > 0 &&
+    now >= heroAttackPoseSwitchAt &&
+    combat.attacker === 'hero' &&
+    combat.turnState === 'swinging' &&
+    hero.currentPose === 'attackTransition'
+  ) {
+    setPose(hero, 'attack');
+    heroAttackPoseSwitchAt = 0;
   }
 
   if (combat.turnState === 'swinging' && now >= combat.swingEndsAt) {
@@ -525,9 +538,10 @@ function triggerAttack(attacker: Side, isCounter = false): void {
   combat.dodgeSuccessThisAttack.npc = false;
   pendingAi.dodgeCommitted = false;
   pendingAi.dodgeAt = 0;
+  heroAttackPoseSwitchAt = 0;
 
   if (attacker === 'hero') {
-    setPose(hero, 'prepare');
+    setPose(hero, 'charge');
     setPose(npc, 'idle');
     setStatus(isCounter ? '反击蓄力中' : '蓄力中，已不可取消');
   } else {
@@ -550,7 +564,8 @@ function enterSwingPhase(now: number): void {
   lungeUntil[attacker] = now + 220;
 
   if (attacker === 'hero') {
-    setPose(hero, 'attack');
+    setPose(hero, 'attackTransition');
+    heroAttackPoseSwitchAt = Math.min(combat.swingEndsAt, now + CONFIG.heroAttackTransitionMs);
     setStatus(combat.isCounterAttack ? '反击挥击中' : '挥击中');
     if (!combat.isCounterAttack && Math.random() < CONFIG.aiDodgeChance) {
       pendingAi.dodgeAt = now + randInt(CONFIG.aiReactionMinMs, CONFIG.aiReactionMaxMs);
@@ -610,6 +625,8 @@ function resolveAttack(): void {
     return;
   }
 
+  heroAttackPoseSwitchAt = 0;
+
   const attacker = combat.attacker;
   const defender: Side = attacker === 'hero' ? 'npc' : 'hero';
   const dodged = combat.dodgeSuccessThisAttack[defender];
@@ -624,7 +641,7 @@ function resolveAttack(): void {
     if (attacker === 'npc') {
       setPose(npc, 'miss');
     } else {
-      setPose(hero, 'recover');
+      setPose(hero, 'attack');
     }
     setStatus(`${nameOf(defender)} 躲避成功`);
     window.setTimeout(() => {
@@ -635,14 +652,14 @@ function resolveAttack(): void {
     if (defender === 'npc') {
       combat.npcHp = Math.max(0, combat.npcHp - damage);
       npc.shakeUntil = performance.now() + 240;
-      setPose(npc, 'hurt');
+      setPose(npc, combat.npcHp <= 0 ? 'defeat' : 'hurt');
       if (attacker === 'hero') {
         setPose(hero, 'attack');
       }
     } else {
       combat.heroHp = Math.max(0, combat.heroHp - damage);
       hero.shakeUntil = performance.now() + 240;
-      setPose(hero, 'recover');
+      setPose(hero, 'hit');
       if (attacker === 'npc') {
         setPose(npc, 'hit');
       }
@@ -667,7 +684,7 @@ function resolveAttack(): void {
     }
 
     if (attacker === 'hero') {
-      setPose(hero, 'recover');
+      setPose(hero, 'attack');
       setPose(npc, 'idle');
     } else {
       setPose(npc, 'idle');
@@ -685,6 +702,7 @@ function resolveAttack(): void {
 }
 
 function swapTurn(): void {
+  heroAttackPoseSwitchAt = 0;
   combat.counterWindowFor = null;
   combat.counterWindowEndsAt = 0;
   combat.counterFromAttacker = null;
@@ -705,6 +723,7 @@ function swapTurn(): void {
 }
 
 function finishTurnWithoutAttack(): void {
+  heroAttackPoseSwitchAt = 0;
   combat.turnState = 'resolved';
   combat.chargeEndsAt = 0;
   combat.swingEndsAt = 0;
@@ -832,10 +851,28 @@ function updateFighterTransform<TPose extends Pose>(fighter: FighterVisual<TPose
     rotation = -0.055;
   }
 
+  if (fighter.side === 'hero' && fighter.currentPose === 'charge') {
+    x -= 22;
+    y += 10;
+    rotation = -0.08;
+  }
+
+  if (fighter.side === 'hero' && fighter.currentPose === 'attackTransition') {
+    x -= 85;
+    y += 6;
+    rotation = -0.038;
+  }
+
   if (fighter.side === 'hero' && fighter.currentPose === 'attack') {
     x -= 120;
     y += 4;
     rotation = -0.02;
+  }
+
+  if (fighter.side === 'hero' && fighter.currentPose === 'hit') {
+    x += 22;
+    y += 8;
+    rotation = 0.07;
   }
 
   if (fighter.side === 'npc' && fighter.currentPose === 'charge') {
@@ -981,11 +1018,13 @@ async function loadAllTextures(): Promise<{
   const stageBackground = await loadTexture('/assets/backgrounds/temp-design.png');
 
   const hero = {
-    idle: await loadTexture('/assets/characters/player/idle.png'),
-    prepare: await loadTexture('/assets/characters/player/prepare.png'),
-    attack: await loadTexture('/assets/characters/player/attack.png'),
-    recover: await loadTexture('/assets/characters/player/recover.png'),
-    dodge: await loadTexture('/assets/characters/player/dodge.png'),
+    idle: await loadTexture('/assets/characters/player/00.png'),
+    prepare: await loadTexture('/assets/characters/player/001.png'),
+    charge: await loadTexture('/assets/characters/player/002.png'),
+    attackTransition: await loadTexture('/assets/characters/player/003.png'),
+    attack: await loadTexture('/assets/characters/player/004.png'),
+    dodge: await loadTexture('/assets/characters/player/005.png'),
+    hit: await loadTexture('/assets/characters/player/006.png'),
     victory: await loadTexture('/assets/characters/player/victory.png'),
   } satisfies Record<HeroPose, Texture>;
 
