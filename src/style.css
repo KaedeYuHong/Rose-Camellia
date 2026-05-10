@@ -197,6 +197,30 @@ body {
   z-index: 12;
 }
 
+#restart-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 78px;
+  transform: translateX(-50%);
+  min-width: 180px;
+  border-radius: 999px;
+  border: 1px solid rgba(251, 218, 173, 0.72);
+  background: linear-gradient(180deg, rgba(89, 36, 23, 0.92), rgba(44, 19, 14, 0.96));
+  color: #ffe8ce;
+  font-family: 'Noto Serif SC', 'Times New Roman', serif;
+  font-size: 16px;
+  letter-spacing: 1px;
+  padding: 10px 26px;
+  z-index: 13;
+  box-shadow:
+    0 0 20px rgba(255, 182, 119, 0.24),
+    inset 0 0 16px rgba(255, 211, 156, 0.16);
+}
+
+#restart-btn:active {
+  transform: translateX(-50%) scale(0.98);
+}
+
 canvas {
   display: block;
 }
